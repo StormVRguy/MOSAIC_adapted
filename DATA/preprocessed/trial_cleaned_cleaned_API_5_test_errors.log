@@ -1,0 +1,19 @@
+Preprocessing Error Log
+================================================================================
+Dataset: trial_cleaned_raw.csv
+Method: Gemini API (gemini-2.0-flash-lite)
+Max text length: No limit
+Total reports: 5
+Skipped (too long): 0
+Errors (quota/other): 4
+Successfully processed: 1
+================================================================================
+
+DETAILS:
+Report 0: [ERROR: Quota Exceeded]
+Report 2: [ERROR: Quota Exceeded]
+Report 3: [ERROR: Quota Exceeded]
+Report 4: [ERROR: Quota Exceeded]
+
+To retry failed rows, run:
+python preprocessing.py --dataset DATASET --method gemini --retry-failed
