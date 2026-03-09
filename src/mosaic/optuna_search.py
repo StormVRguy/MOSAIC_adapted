@@ -66,19 +66,20 @@ class OptunaSearchBERTopic:
         self.setup_models()
 
     def _load_config(self):
-        """Dynamically load the dataset configuration."""
+        """Dynamically load the dataset configuration, falling back to dreamachine."""
         try:
-            # Assumes mosaic/configs/dataset.py structure
             module_name = f"mosaic.configs.{self.dataset}"
             config_module = importlib.import_module(module_name)
             print(f"Loaded config from {module_name}")
             return config_module.config
-        except ImportError:
-            print(f"Config for '{self.dataset}' not found. Using defaults.")
-            return None
-        except AttributeError:
-            print(f"Module loaded but 'config' object missing. Using defaults.")
-            return None
+        except (ImportError, AttributeError):
+            print(f"Config for '{self.dataset}' not found – using dreamachine defaults.")
+            try:
+                from mosaic.configs.dreamachine import config as default_config
+                return default_config
+            except ImportError:
+                from src.mosaic.configs.dreamachine import config as default_config
+                return default_config
 
     def _setup_embedding_settings(self):
         """Determine which transformer model to use."""
@@ -86,7 +87,7 @@ class OptunaSearchBERTopic:
             self.transformer_model_name = self.config.transformer_model
             print(f"  - Model (Config): {self.transformer_model_name}")
         else:
-            self.transformer_model_name = "Qwen/Qwen3-Embedding-0.6B"
+            self.transformer_model_name = "paraphrase-multilingual-mpnet-base-v2"
             print(f"  - Model (Default): {self.transformer_model_name}")
 
     def _setup_vectorizer_settings(self):
@@ -111,106 +112,87 @@ class OptunaSearchBERTopic:
     def _find_preprocessed_file(self, preprocessed_dir: Path) -> Path:
         """
         Smart discovery of the best data file.
-        PRIORITY: API Cleaned > Llama Cleaned > Generic Preprocessed
+        PRIORITY: condition-named > API Cleaned > Llama Cleaned > Generic Preprocessed
         """
         if not preprocessed_dir.exists():
             return None
-        
-        # Priority list (Highest quality first)
+
+        # Priority list (highest quality first).
+        # Condition-named CSV (e.g. Report_meditazione_cleaned.csv) is checked first
+        # so trial/custom datasets are found without extra configuration.
         patterns = [
-            f"{self.dataset}_cleaned_API.csv",                              # Generic API
+            f"{self.condition}.csv",                                        # Condition-named (trial datasets)
+            f"{self.dataset}_cleaned_API.csv",
             f"{self.dataset}_{self.condition}_cleaned_llama.csv",
             f"{self.dataset}_cleaned_llama.csv",
-            f"{self.dataset}_preprocessed.csv"
+            f"{self.dataset}_preprocessed.csv",
         ]
-        
-        # Check specific patterns
+
         for pattern in patterns:
             file_path = preprocessed_dir / pattern
             if file_path.exists():
-                # Double check if other files exist to warn user
                 all_matches = list(preprocessed_dir.glob(f"{self.dataset}*.csv"))
                 if len(all_matches) > 1:
                     print(f"  ! Note: Multiple files found for '{self.dataset}'.")
                     print(f"  ! Selected highest priority: {pattern}")
                 return file_path
-        
-        # Fallback: Wildcard search
+
+        # Fallback: wildcard on dataset name
         matches = list(preprocessed_dir.glob(f"{self.dataset}*.csv"))
         if matches:
             print(f"  ! Warning: No standard filename match. Using found file: {matches[0].name}")
             return matches[0]
-            
+
         return None
 
     def setup_paths(self):
-        # 1. Data Path
-        # robustly find the project root by looking 3 levels up
+        # 1. Project root is two levels up from this file (src/mosaic -> src -> project_root)
         current_dir = Path(__file__).resolve().parent
+        project_root = current_dir.parent.parent
+
+        # 2. Data Path – search DATA subdirectories in priority order
         possible_roots = [
-            current_dir / "DATA",                   # Same dir
-            current_dir.parent / "DATA",            # src/DATA
-            current_dir.parent.parent / "DATA",     # MOSAIC/DATA (Likely correct)
-            current_dir.parent.parent.parent / "DATA" 
+            project_root / "DATA" / "raw",
+            project_root / "DATA" / self.dataset,
+            project_root / "DATA" / "preprocessed",
+            project_root / "DATA",
         ]
-        
+
         data_file = None
-        
-        # Scan all possible DATA locations
         for root in possible_roots:
             if not root.exists():
                 continue
-                
-            # Check root/{dataset} folder
-            if (root / self.dataset).exists():
-                found = self._find_preprocessed_file(root / self.dataset)
-                if found:
-                    data_file = found
-                    print(f"  (Found data in: {root / self.dataset})")
-                    break
-                    
-            # Check root/preprocessed folder
-            if (root / "preprocessed").exists():
-                found = self._find_preprocessed_file(root / "preprocessed")
-                if found:
-                    data_file = found
-                    print(f"  (Found data in: {root / 'preprocessed'})")
-                    break
-            
-            # Check root directly
             found = self._find_preprocessed_file(root)
             if found:
                 data_file = found
+                print(f"  (Found data in: {root})")
                 break
 
         if not data_file:
-            # Print where we looked to help debug
             checked = [str(p) for p in possible_roots]
-            raise FileNotFoundError(f"Could not find data for '{self.dataset}'. \nChecked in: {checked}")
-            
+            raise FileNotFoundError(
+                f"Could not find data for dataset='{self.dataset}', condition='{self.condition}'.\n"
+                f"Checked in: {checked}"
+            )
+
         self.data_path = str(data_file)
         print(f"✓ Using data file: {self.data_path}")
 
-        # 2. Results Path (Save relative to the found DATA root's parent, i.e., project root)
-        # If we found data at MOSAIC/DATA, we want results at MOSAIC/results/optuna
-        project_root = Path(data_file).parent.parent 
-        if "preprocessed" in str(Path(data_file).parent): # Handle preprocessed subfolder
-             project_root = project_root.parent
-
+        # 3. Results Path – mirrors the path the notebook looks for:
+        #    EVAL/{dataset}/optuna_search/OPTUNA_results_{condition}_{sent_suffix}_{model}.csv
+        sent_suffix = 'sentences' if self.use_sentences else ''
         sanitized_model = self.transformer_model_name.replace('/', '_')
-        
-        # Fallback if project root calculation is weird, use current script relative path
-        if not project_root.exists():
-            project_root = Path("results/optuna")
-        else:
-            project_root = project_root / "results/optuna"
-            
-        results_dir = project_root / self.dataset
-        results_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.results_path = str(results_dir / f"OPTUNA_{self.condition}_{sanitized_model}_results.csv")
-        self.study_db_path = str(results_dir / f"OPTUNA_{self.condition}_{sanitized_model}.db")
-        
+
+        optuna_dir = project_root / "EVAL" / self.dataset / "optuna_search"
+        optuna_dir.mkdir(parents=True, exist_ok=True)
+
+        self.results_path = str(
+            optuna_dir / f"OPTUNA_results_{self.condition}_{sent_suffix}_{sanitized_model}.csv"
+        )
+        self.study_db_path = str(
+            optuna_dir / f"OPTUNA_{self.condition}_{sent_suffix}_{sanitized_model}.db"
+        )
+
         print(f"✓ Results will be saved to: {self.results_path}")
 
     def setup_models(self):
@@ -225,12 +207,16 @@ class OptunaSearchBERTopic:
 
     def load_data(self):
         df = pd.read_csv(self.data_path)
-        # Try to find the text column intelligently
+        # Try to find the text column intelligently.
+        # 'Report' is the column produced by clean_report.py for the trial dataset.
         cols = df.columns
-        text_col = next((c for c in ['cleaned_reflection', 'reflection_answer', 'text'] if c in cols), None)
-        
+        text_col = next(
+            (c for c in ['cleaned_reflection', 'reflection_answer', 'Report', 'text'] if c in cols),
+            None
+        )
+
         if not text_col:
-            raise ValueError(f"Could not find text column in {cols}")
+            raise ValueError(f"Could not find text column in {list(cols)}")
             
         texts = df[text_col].dropna().reset_index(drop=True)
         
@@ -247,9 +233,9 @@ class OptunaSearchBERTopic:
     def initialize_results_file(self):
         if not os.path.exists(self.results_path):
             pd.DataFrame(columns=[
-                'trial_number', 'objective_embed_coherence', 'objective_cv',
+                'trial_number', 'embedding_coherence', 'coherence_score',
                 'n_components', 'n_neighbors', 'min_dist', 'min_cluster_size', 'min_samples',
-                'embedding_coherence_attr', 'coherence_score_cv_attr', 'n_topics'
+                'n_topics'
             ]).to_csv(self.results_path, index=False)
 
     def _define_search_space(self, trial):
@@ -341,19 +327,17 @@ class OptunaSearchBERTopic:
     def save_callback(self, study, trial):
         if trial.state != optuna.trial.TrialState.COMPLETE:
             return
-        
+
         result_row = [
             trial.number,
-            trial.values[0],
-            trial.values[1],
+            trial.values[0],   # embedding_coherence
+            trial.values[1],   # coherence_score
             trial.params['n_components'], trial.params['n_neighbors'],
             trial.params['min_dist'], trial.params['min_cluster_size'],
             trial.params['min_samples'],
-            trial.user_attrs.get('embedding_coherence', 0),
-            trial.user_attrs.get('coherence_score', 0),
-            trial.user_attrs.get('n_topics', 0)
+            trial.user_attrs.get('n_topics', 0),
         ]
-        
+
         with open(self.results_path, 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(result_row)

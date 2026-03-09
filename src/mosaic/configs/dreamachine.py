@@ -9,14 +9,15 @@ from nltk.corpus import stopwords
 class DreamachineConfig:
     def __init__(self):
         self.reduced_custom_stopwords = {}
-        self.stop_words = set(stopwords.words('english'))
+        self.stop_words = set(stopwords.words('italian'))
         self.extended_stop_words = self.stop_words.union(self.reduced_custom_stopwords)
         
         # Dataset specific configurations
         self.name = "dreamachine"
 
-        # Embedding model to use (all-mpnet-base-v2 works with standard transformers; for Qwen3 upgrade transformers)
-        self.transformer_model = "sentence-transformers/all-mpnet-base-v2"
+        # Multilingual model — supports Italian (and 50+ other languages).
+        # Switch to "intfloat/multilingual-e5-large" for higher quality if a GPU is available.
+        self.transformer_model = "paraphrase-multilingual-mpnet-base-v2"
 
         # Vectorizer settings
         self.ngram_range = (1, 3)

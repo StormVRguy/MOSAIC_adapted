@@ -56,16 +56,36 @@ except ImportError:
 # SECTION 1: BASIC TEXT PREPROCESSING (Structure)
 # =============================================================================
 
-def split_sentences(reflections):
+def split_sentences(reflections, advanced_split=False):
+    """Split each reflection into sentences.
+
+    Parameters
+    ----------
+    reflections : list[str]
+        Source documents.
+    advanced_split : bool
+        When True, each Punkt-tokenized sentence is further split on
+        colon, semicolon and comma in addition to the standard full stop.
+        Useful for Italian prose where clauses are often comma/semicolon-separated.
+    """
     tokenizer = PunktSentenceTokenizer()
     sentences = []
-    doc_map = [] 
-    
+    doc_map = []
+
     for doc_idx, reflection in enumerate(reflections):
         doc_sentences = tokenizer.tokenize(reflection)
+
+        if advanced_split:
+            expanded = []
+            for sent in doc_sentences:
+                # Split further on :  ;  , — keep non-empty, stripped fragments
+                parts = re.split(r'[:,;]', sent)
+                expanded.extend(p.strip() for p in parts if p.strip())
+            doc_sentences = expanded
+
         sentences.extend(doc_sentences)
         doc_map.extend([doc_idx] * len(doc_sentences))
-    
+
     return sentences, doc_map
 
 

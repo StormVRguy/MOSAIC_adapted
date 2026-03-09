@@ -1,11 +1,22 @@
 from pathlib import Path
 import os, yaml, warnings
-from importlib.resources import files
 from typing import Optional
+
+try:
+    from importlib.resources import files as _importlib_files
+    def _package_root() -> Path:
+        return Path(str(_importlib_files("mosaic")))
+except ImportError:
+    # Python < 3.9 fallback
+    def _package_root() -> Path:
+        return Path(__file__).resolve().parent
 
 # ---------- config loading ----------
 def _default_cfg() -> dict:
-    return yaml.safe_load((files("mosaic") / "configs" / "default.yaml").read_text())
+    cfg_path = _package_root() / "configs" / "default.yaml"
+    if not cfg_path.exists():
+        return {}
+    return yaml.safe_load(cfg_path.read_text())
 
 def _user_cfg() -> dict:
     for p in [Path.home()/".config/mosaic/config.yaml",
